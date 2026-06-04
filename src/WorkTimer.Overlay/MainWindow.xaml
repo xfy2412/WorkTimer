@@ -46,7 +46,7 @@
                         <TextBlock x:Name="HamburgerIcon" Text="☰☰☰"
                                    Foreground="#666666" FontSize="10"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        <Border Height="1" Background="#444444"
+                        <Border x:Name="SeparatorLine" Height="1" Background="#444444"
                                 VerticalAlignment="Bottom" Margin="6,0,6,0"/>
                     </Grid>
                 </Border>

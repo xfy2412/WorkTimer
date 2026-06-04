@@ -1,6 +1,6 @@
 using Microsoft.Win32;
 
-namespace WorkTimer.Overlay;
+namespace WorkTimer.Core;
 
 public static class AutoStartService
 {

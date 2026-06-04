@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "WorkTimer.Settings (Unpackaged)": {
+      "commandName": "Project",
+      "nativeDebugging": false
+    }
+  }
+}

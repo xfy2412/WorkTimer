@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
+using WorkTimer.Core;
 using WorkTimer.Core.Data;
 using WorkTimer.Core.Services;
 

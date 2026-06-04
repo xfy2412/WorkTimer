@@ -178,7 +178,7 @@ public partial class MainWindow : Window
             if (!_interactiveMode)
             {
                 _hoverTickCount++;
-                if (_hoverTickCount >= 10)
+                if (_hoverTickCount >= 5)
                 {
                     _interactiveMode = true;
                     _inPassthrough = false;
@@ -203,10 +203,14 @@ public partial class MainWindow : Window
     private static readonly SolidColorBrush DarkBg = new(System.Windows.Media.Color.FromRgb(0x2D, 0x2D, 0x2D));
     private static readonly SolidColorBrush AmberBg = new(System.Windows.Media.Color.FromRgb(0xCC, 0x80, 0x00));
 
+    private static readonly SolidColorBrush DarkLine = new(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44));
+    private static readonly SolidColorBrush AmberLine = new(System.Windows.Media.Color.FromRgb(0xE0, 0xA0, 0x30));
+
     private void BlinkTimer_Tick(object? sender, EventArgs e)
     {
         _blinkState = !_blinkState;
         CardBorder.Background = _blinkState ? AmberBg : DarkBg;
+        SeparatorLine.Background = _blinkState ? AmberLine : DarkLine;
     }
 
     private void SetAmber(bool blink)
@@ -215,12 +219,14 @@ public partial class MainWindow : Window
         {
             _blinkState = true;
             CardBorder.Background = AmberBg;
+            SeparatorLine.Background = AmberLine;
             _blinkTimer.Start();
         }
         else
         {
             _blinkTimer.Stop();
             CardBorder.Background = AmberBg;
+            SeparatorLine.Background = AmberLine;
         }
     }
 
@@ -228,6 +234,7 @@ public partial class MainWindow : Window
     {
         _blinkTimer.Stop();
         CardBorder.Background = DarkBg;
+        SeparatorLine.Background = DarkLine;
         HamburgerIcon.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
     }
 
