@@ -24,6 +24,14 @@ public partial class MainWindow : Window
     private const int HTCLIENT = 1;
     private const int HTCAPTION = 2;
     private const int HTTRANSPARENT = -1;
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TRANSPARENT = 0x20;
+
+    [DllImport("user32.dll")]
+    private static extern nint GetWindowLongPtr(nint hWnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
 
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT lpPoint);
@@ -38,6 +46,10 @@ public partial class MainWindow : Window
     private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
     // ─── Colors ─────────────────────────────────────────
+    private static readonly SolidColorBrush DarkBg = new(Color.FromRgb(0x2D, 0x2D, 0x2D));
+    private static readonly SolidColorBrush AmberBg = new(Color.FromRgb(0xCC, 0x80, 0x00));
+    private static readonly SolidColorBrush DarkLine = new(Color.FromRgb(0x44, 0x44, 0x44));
+    private static readonly SolidColorBrush AmberLine = new(Color.FromRgb(0xE0, 0xA0, 0x30));
 
     // ─── Fields ─────────────────────────────────────────
     private readonly DatabaseService _db;
@@ -50,15 +62,13 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _blinkTimer;
     private readonly TaskbarIcon _trayIcon;
     private nint _windowHandle;
-    private bool _inPassthrough = true;
-    private bool _isMouseOver;
-    private bool _interactiveMode;
+    private OverlayWindowState _state = OverlayWindowState.Passthrough;
     private int _hoverTickCount;
     private int _hoverThreshold;
     private double _defaultOpacity;
-    private bool _showContinuationPrompt;
     private bool _blinkState;
-    private bool _findMeMode;
+    private bool _showContinuationPrompt;
+    private bool _mouseWasOver;
 
     public MainWindow(DatabaseService db, SessionManager sessionManager)
     {
@@ -76,16 +86,10 @@ public partial class MainWindow : Window
         _timerService.PauseStateChanged += OnPauseStateChanged;
         _hoverThreshold = (int)(_settingsManager.Data.HoverDelaySeconds * 1000 / 200);
 
-        _pollTimer = new DispatcherTimer(DispatcherPriority.Normal)
-        {
-            Interval = TimeSpan.FromMilliseconds(200)
-        };
+        _pollTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(200) };
         _pollTimer.Tick += PollTimer_Tick;
 
-        _blinkTimer = new DispatcherTimer(DispatcherPriority.Normal)
-        {
-            Interval = TimeSpan.FromMilliseconds(800)
-        };
+        _blinkTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(800) };
         _blinkTimer.Tick += BlinkTimer_Tick;
 
         _trayIcon = new TaskbarIcon
@@ -95,138 +99,98 @@ public partial class MainWindow : Window
             Visibility = Visibility.Visible,
         };
         _trayIcon.TrayMouseDoubleClick += (_, _) => TogglePassthrough();
-        _trayIcon.TrayLeftMouseDown += (_, _) => EnterFindMeMode();
+        _trayIcon.TrayLeftMouseDown += (_, _) => GoFindMe();
         _trayIcon.ContextMenu = CreateTrayMenu();
 
         Loaded += MainWindow_Loaded;
         SourceInitialized += OnSourceInitialized;
-        Closed += (_, _) =>
-        {
-            _configService.Save();
-            _trayIcon.Dispose();
-        };
+        Closed += (_, _) => { _configService.Save(); _trayIcon.Dispose(); };
 
         RestorePosition();
     }
 
-    // ─── 初始化 ─────────────────────────────────────────
-    private void OnSourceInitialized(object? sender, EventArgs e)
+    // ═══════════════════════════════════════════════════════
+    //  状态管理 —— 所有状态变化走 TransitionTo
+    // ═══════════════════════════════════════════════════════
+
+    private bool InPassthrough =>
+        _state is OverlayWindowState.Passthrough or OverlayWindowState.Hidden;
+
+    /// <summary>设置/取消 WS_EX_TRANSPARENT，确保鼠标穿透</summary>
+    private void ApplyWindowStyle()
     {
-        _windowHandle = new WindowInteropHelper(this).Handle;
-        if (_windowHandle != nint.Zero)
-        {
-            var source = HwndSource.FromHwnd(_windowHandle);
-            source?.AddHook(WndProc);
-            Opacity = _defaultOpacity;
-        }
-    }
-
-    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
-    {
-        Logger.Write("[MainWindow] 窗口加载完成");
-
-        // 启动 IPC 监听，收到消息后分发到 UI 线程再处理
-        var uiDispatcher = Dispatcher;
-        _ = Task.Run(() => SettingsIpc.StartServerAsync(
-            msg => uiDispatcher.BeginInvoke(() => OnIpcMessage(msg))));
-
-        var (session, needsPrompt) = await _sessionManager.StartupCheckAsync();
-
-        if (session != null)
-            _heartbeatService.Start(session.Id);
-
-        if (needsPrompt)
-        {
-            _showContinuationPrompt = true;
-            ShowContinuationPrompt();
-        }
-        else
-        {
-            _pollTimer.Start();
-            _timerService.Start();
-        }
-    }
-
-    // ─── WM_NCHITTEST（支持拖拽手柄穿透点击）───────────
-    private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
-    {
-        if (msg != WM_NCHITTEST) return nint.Zero;
-
-        var x = (short)(lParam.ToInt64() & 0xFFFF);
-        var y = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
-
-        GetWindowRect(_windowHandle, out RECT win);
-        var localY = y - win.Top;
-
-        // 拖拽手柄区（顶部 20px）始终返回 HTCAPTION，穿透模式下也可拖拽
-        if (localY >= 0 && localY <= 20)
-        {
-            handled = true;
-            return (nint)HTCAPTION;
-        }
-
-        // 其余区域：穿透模式返回 HTTRANSPARENT，交互模式返回 HTCLIENT
-        handled = true;
-        return (nint)(_inPassthrough ? HTTRANSPARENT : HTCLIENT);
-    }
-
-    // ─── 鼠标轮询（每 200ms）─────────────────────────────
-    private void PollTimer_Tick(object? sender, EventArgs e)
-    {
-        if (_findMeMode || _showContinuationPrompt) return;
         if (_windowHandle == nint.Zero) return;
-
-        GetCursorPos(out POINT cursor);
-        GetWindowRect(_windowHandle, out RECT win);
-
-        bool over = cursor.X >= win.Left && cursor.X <= win.Right &&
-                    cursor.Y >= win.Top && cursor.Y <= win.Bottom;
-
-        if (over)
-        {
-            if (!_isMouseOver)
-            {
-                _isMouseOver = true;
-                _hoverTickCount = 0;
-                _interactiveMode = false;
-            }
-
-            if (!_interactiveMode)
-            {
-                _hoverTickCount++;
-                if (_hoverTickCount >= _hoverThreshold)
-                {
-                    _interactiveMode = true;
-                    _inPassthrough = false;
-                    BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeIn"));
-                }
-            }
-        }
+        var style = GetWindowLongPtr(_windowHandle, GWL_EXSTYLE);
+        if (InPassthrough)
+            style = new nint(style.ToInt64() | WS_EX_TRANSPARENT);
         else
-        {
-            if (_isMouseOver)
-            {
-                _isMouseOver = false;
-                _hoverTickCount = 0;
-                _interactiveMode = false;
-                _inPassthrough = true;
-                BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeOut"));
-            }
-        }
+            style = new nint(style.ToInt64() & ~WS_EX_TRANSPARENT);
+        SetWindowLongPtr(_windowHandle, GWL_EXSTYLE, style);
     }
 
-    // ─── 琥珀色闪烁 ──────────────────────────────────────
-    private static readonly SolidColorBrush DarkBg = new(System.Windows.Media.Color.FromRgb(0x2D, 0x2D, 0x2D));
-    private static readonly SolidColorBrush AmberBg = new(System.Windows.Media.Color.FromRgb(0xCC, 0x80, 0x00));
-
-    private static readonly SolidColorBrush DarkLine = new(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44));
-    private static readonly SolidColorBrush AmberLine = new(System.Windows.Media.Color.FromRgb(0xE0, 0xA0, 0x30));
-
-    private void BlinkTimer_Tick(object? sender, EventArgs e)
+    /// <summary>统一状态切换：清旧态、设新态、调 UI</summary>
+    private void TransitionTo(OverlayWindowState newState)
     {
-        _blinkState = !_blinkState;
-        CardBorder.Background = _blinkState ? AmberBg : DarkBg;
-        SeparatorLine.Background = _blinkState ? AmberLine : DarkLine;
+        var old = _state;
+        _state = newState;
+
+        // 退出旧态的收尾工作
+        if (old == OverlayWindowState.FindMe && newState != OverlayWindowState.FindMe)
+        {
+            TimeText.FontSize = 26;
+            _timerService.Start();
+            _pollTimer.Start();
+        }
+        if (old == OverlayWindowState.ContinuationPrompt && newState != OverlayWindowState.ContinuationPrompt)
+            _showContinuationPrompt = false;
+
+        // 进入新态
+        switch (newState)
+        {
+            case OverlayWindowState.Hidden:
+                Visibility = Visibility.Hidden;
+                _blinkTimer.Stop();
+                break;
+
+            case OverlayWindowState.Passthrough:
+                Visibility = Visibility.Visible;
+                this.WindowState = System.Windows.WindowState.Normal;
+                ResetColors();
+                if (_sessionManager.IsPaused) SetAmber(blink: true);
+                BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeOut"));
+                _hoverTickCount = 0;
+                _pollTimer.Start();
+                _timerService.Start();
+                break;
+
+            case OverlayWindowState.Interactive:
+                Visibility = Visibility.Visible;
+                ResetColors();
+                if (_sessionManager.IsPaused) SetAmber(blink: true);
+                BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeIn"));
+                break;
+
+            case OverlayWindowState.FindMe:
+                Visibility = Visibility.Visible;
+                this.WindowState = System.Windows.WindowState.Normal;
+                TimeText.Text = "我在这里";
+                StatusText.FontSize = 12;
+                StatusText.Text = "点击恢复";
+                _timerService.Stop();
+                _pollTimer.Stop();
+                BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeIn"));
+                SetAmber(blink: true);
+                Activate();
+                break;
+
+            case OverlayWindowState.ContinuationPrompt:
+                Visibility = Visibility.Visible;
+                this.WindowState = System.Windows.WindowState.Normal;
+                Opacity = 0.85;
+                SetAmber(blink: false);
+                break;
+        }
+        ApplyWindowStyle();
     }
 
     private void SetAmber(bool blink)
@@ -251,10 +215,125 @@ public partial class MainWindow : Window
         _blinkTimer.Stop();
         CardBorder.Background = DarkBg;
         SeparatorLine.Background = DarkLine;
-        HamburgerIcon.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
+        HamburgerIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66));
     }
 
-    // ─── 续接提示 ───────────────────────────────────────
+    private void BlinkTimer_Tick(object? sender, EventArgs e)
+    {
+        _blinkState = !_blinkState;
+        CardBorder.Background = _blinkState ? AmberBg : DarkBg;
+        SeparatorLine.Background = _blinkState ? AmberLine : DarkLine;
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  初始化
+    // ═══════════════════════════════════════════════════════
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        _windowHandle = new WindowInteropHelper(this).Handle;
+        if (_windowHandle != nint.Zero)
+        {
+            var source = HwndSource.FromHwnd(_windowHandle);
+            source?.AddHook(WndProc);
+            Opacity = _defaultOpacity;
+            ApplyWindowStyle();
+        }
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        Logger.Write("[MainWindow] 窗口加载完成");
+
+        var uiDispatcher = Dispatcher;
+        _ = Task.Run(() => SettingsIpc.StartServerAsync(
+            msg => uiDispatcher.BeginInvoke(() => OnIpcMessage(msg))));
+
+        var (session, needsPrompt) = await _sessionManager.StartupCheckAsync();
+
+        if (session != null)
+            _heartbeatService.Start(session.Id);
+
+        if (needsPrompt)
+        {
+            _showContinuationPrompt = true;
+            ShowContinuationPrompt();
+        }
+        else
+        {
+            _pollTimer.Start();
+            _timerService.Start();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  WM_NCHITTEST
+    // ═══════════════════════════════════════════════════════
+
+    private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg != WM_NCHITTEST) return nint.Zero;
+
+        var x = (short)(lParam.ToInt64() & 0xFFFF);
+        var y = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
+
+        GetWindowRect(_windowHandle, out RECT win);
+        var localY = y - win.Top;
+
+        if (localY >= 0 && localY <= 20)
+        {
+            handled = true;
+            return (nint)HTCAPTION;
+        }
+
+        handled = true;
+        return (nint)(InPassthrough ? HTTRANSPARENT : HTCLIENT);
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  鼠标轮询
+    // ═══════════════════════════════════════════════════════
+
+    private void PollTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_state is OverlayWindowState.FindMe or OverlayWindowState.ContinuationPrompt)
+            return;
+        if (_windowHandle == nint.Zero) return;
+
+        GetCursorPos(out POINT cursor);
+        GetWindowRect(_windowHandle, out RECT win);
+
+        bool over = cursor.X >= win.Left && cursor.X <= win.Right &&
+                    cursor.Y >= win.Top && cursor.Y <= win.Bottom;
+
+        if (over)
+        {
+            if (!_mouseWasOver)
+            {
+                _mouseWasOver = true;
+                _hoverTickCount = 0;
+            }
+
+            if (_state == OverlayWindowState.Passthrough)
+            {
+                _hoverTickCount++;
+                if (_hoverTickCount >= _hoverThreshold)
+                    TransitionTo(OverlayWindowState.Interactive);
+            }
+        }
+        else
+        {
+            _mouseWasOver = false;
+            if (_state != OverlayWindowState.Passthrough)
+                TransitionTo(OverlayWindowState.Passthrough);
+            _hoverTickCount = 0;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  续接提示
+    // ═══════════════════════════════════════════════════════
+
     private void ShowContinuationPrompt()
     {
         var elapsed = _sessionManager.GetElapsed(DateTime.UtcNow);
@@ -262,10 +341,7 @@ public partial class MainWindow : Window
             ? $"上次 {(int)elapsed.TotalHours}h{elapsed.Minutes}m"
             : $"上次 {elapsed.Minutes}m{elapsed.Seconds}s";
         StatusText.Text = "左键续接 · 右键重置";
-
-        SetAmber(blink: false); // 琥珀色常亮
-        _inPassthrough = false;
-        Opacity = 0.85;
+        TransitionTo(OverlayWindowState.ContinuationPrompt);
 
         var countdown = 10;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -279,16 +355,12 @@ public partial class MainWindow : Window
         PreviewMouseLeftButtonDown += (_, e) =>
         {
             if (!_showContinuationPrompt) return;
-            e.Handled = true;
-            timer.Stop();
-            _ = ContinueSession(true);
+            e.Handled = true; timer.Stop(); _ = ContinueSession(true);
         };
         PreviewMouseRightButtonDown += (_, e) =>
         {
             if (!_showContinuationPrompt) return;
-            e.Handled = true;
-            timer.Stop();
-            _ = ContinueSession(false);
+            e.Handled = true; timer.Stop(); _ = ContinueSession(false);
         };
     }
 
@@ -296,70 +368,31 @@ public partial class MainWindow : Window
     {
         Logger.Write($"[MainWindow] 续接选择: {(continueLast ? "继续" : "重置")}");
         _showContinuationPrompt = false;
-        if (continueLast)
-        {
-            await _sessionManager.ContinueSessionAsync();
-            StatusText.Text = "工作中";
-        }
-        else
-        {
-            await _sessionManager.ResetSessionAsync();
-            StatusText.Text = "工作中";
-        }
-
-        ResetColors();
+        if (continueLast) await _sessionManager.ContinueSessionAsync();
+        else await _sessionManager.ResetSessionAsync();
         TimeText.FontSize = 26;
-        _interactiveMode = false;
-        _hoverTickCount = 0;
-        _inPassthrough = true;
-        Opacity = _defaultOpacity;
-        _isMouseOver = false;
-
+        StatusText.Text = "工作中";
+        TransitionTo(OverlayWindowState.Passthrough);
         _pollTimer.Start();
         _timerService.Start();
     }
 
-    // ─── 拖拽手柄 ────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════
+    //  查找模式
+    // ═══════════════════════════════════════════════════════
+
+    private void GoFindMe() => TransitionTo(OverlayWindowState.FindMe);
+    private void ExitFindMe() => TransitionTo(OverlayWindowState.Passthrough);
     private void DragHandle_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        // WM_NCHITTEST 已经处理了拖拽逻辑，这里仅做安全兜底
         if (e.LeftButton == MouseButtonState.Pressed && _windowHandle != nint.Zero)
             DragMove();
     }
 
-    // ─── 查找模式 ────────────────────────────────────────
-    private void EnterFindMeMode()
-    {
-        _findMeMode = true;
-        var saved = TimeText.Text;
-        TimeText.Text = "我在这里";
-        StatusText.FontSize = 12;
-        StatusText.Text = "点击恢复";
-        _timerService.Stop();
-        _pollTimer.Stop();
+    // ═══════════════════════════════════════════════════════
+    //  计时 / 暂停
+    // ═══════════════════════════════════════════════════════
 
-        _inPassthrough = false;
-        ShowWindow();
-        BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeIn"));
-        SetAmber(blink: true);
-    }
-
-    private void ExitFindMeMode()
-    {
-        if (!_findMeMode) return;
-        _findMeMode = false;
-        ResetColors();
-        TimeText.FontSize = 26;
-        StatusText.Text = _sessionManager.IsPaused ? "已暂停" : "工作中";
-        _timerService.Start();
-        _pollTimer.Start();
-
-        _inPassthrough = true;
-        Opacity = _defaultOpacity;
-        _isMouseOver = false;
-    }
-
-    // ─── 计时 UI ────────────────────────────────────────
     private void OnTimerTick(TimeSpan elapsed)
     {
         TimeText.Text = elapsed.TotalHours >= 1
@@ -371,26 +404,24 @@ public partial class MainWindow : Window
     {
         StatusText.Text = isPaused ? "已暂停" : "工作中";
         _trayIcon.ToolTipText = isPaused ? "WorkTimer - 已暂停" : "WorkTimer - 工作中";
-
-        if (isPaused)
-            SetAmber(blink: true);    // 暂停 → 琥珀色闪烁
-        else
-            ResetColors();            // 恢复 → 白色
+        if (isPaused) SetAmber(blink: true);
+        else if (_state != OverlayWindowState.FindMe) ResetColors();
     }
 
-    // ─── IPC 配置同步 ───────────────────────────────────
+    // ═══════════════════════════════════════════════════════
+    //  IPC
+    // ═══════════════════════════════════════════════════════
+
     private void OnIpcMessage(IpcMessage msg)
     {
         switch (msg.Type)
         {
-            case "set":
-                ApplySetting(msg.Key, msg.Value);
-                break;
+            case "set": ApplySetting(msg.Key, msg.Value); break;
             case "reload":
                 _settingsManager.Load();
                 _hoverThreshold = (int)(_settingsManager.Data.HoverDelaySeconds * 1000 / 200);
                 _defaultOpacity = _settingsManager.Data.DefaultOpacity;
-                if (_inPassthrough) Opacity = _defaultOpacity;
+                if (InPassthrough) Opacity = _defaultOpacity;
                 break;
         }
     }
@@ -401,72 +432,52 @@ public partial class MainWindow : Window
         {
             case "HoverDelaySeconds":
                 if (double.TryParse(value, out var hd))
-                {
-                    _hoverThreshold = (int)(hd * 1000 / 200);
-                    _settingsManager.Data.HoverDelaySeconds = hd;
-                }
+                { _hoverThreshold = (int)(hd * 1000 / 200); _settingsManager.Data.HoverDelaySeconds = hd; }
                 break;
             case "DefaultOpacity":
                 if (double.TryParse(value, out var op))
-                {
-                    _defaultOpacity = op;
-                    _settingsManager.Data.DefaultOpacity = op;
-                    if (_inPassthrough) Opacity = op;
-                }
+                { _defaultOpacity = op; _settingsManager.Data.DefaultOpacity = op; if (InPassthrough) Opacity = op; }
                 break;
         }
     }
 
-    // ─── 左键（暂停/继续）────────────────────────────────
+    // ═══════════════════════════════════════════════════════
+    //  鼠标事件
+    // ═══════════════════════════════════════════════════════
+
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_findMeMode) { ExitFindMeMode(); return; }
-        if (_showContinuationPrompt || !_interactiveMode) return;
+        if (_state == OverlayWindowState.FindMe) { ExitFindMe(); return; }
+        if (_state is OverlayWindowState.ContinuationPrompt or OverlayWindowState.Passthrough) return;
         _ = TogglePauseAsync();
     }
 
     private async Task TogglePauseAsync()
     {
         if (_sessionManager.IsPaused)
-        {
-            await _sessionManager.ResumeAsync();
-            _timerService.NotifyPauseState(false);
-        }
+        { await _sessionManager.ResumeAsync(); _timerService.NotifyPauseState(false); }
         else
-        {
-            await _sessionManager.PauseAsync();
-            _timerService.NotifyPauseState(true);
-        }
-    }
-
-    // ─── XAML 上下文菜单 ─────────────────────────────────
-    private async void TogglePause_Click(object sender, RoutedEventArgs e)
-    {
-        if (_sessionManager.IsPaused)
-        {
-            await _sessionManager.ResumeAsync();
-            _timerService.NotifyPauseState(false);
-        }
-        else
-        {
-            await _sessionManager.PauseAsync();
-            _timerService.NotifyPauseState(true);
-        }
+        { await _sessionManager.PauseAsync(); _timerService.NotifyPauseState(true); }
     }
 
     private void Window_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (_showContinuationPrompt || !_interactiveMode) return;
+        if (_state is OverlayWindowState.ContinuationPrompt or OverlayWindowState.Passthrough or OverlayWindowState.Hidden) return;
         if (ContextMenu != null) ContextMenu.IsOpen = true;
         e.Handled = true;
     }
+
+    // ═══════════════════════════════════════════════════════
+    //  上下文菜单
+    // ═══════════════════════════════════════════════════════
+
+    private async void TogglePause_Click(object sender, RoutedEventArgs e) => await TogglePauseAsync();
 
     private async void Reset_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show("确定要重置计时？当前会话数据将归档。", "重置",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         await _sessionManager.ResetSessionAsync();
-        ResetColors();
         TimeText.Text = "00:00:00";
         StatusText.Text = "工作中";
     }
@@ -478,74 +489,63 @@ public partial class MainWindow : Window
     {
         try
         {
-            Process.Start(new ProcessStartInfo(
-                Path.Combine(AppContext.BaseDirectory, "WorkTimer.Settings.exe"), args)
-            { UseShellExecute = true });
+            var dir = AppContext.BaseDirectory;
+            for (int i = 0; i < 5; i++)
+            {
+                if (File.Exists(Path.Combine(dir, "WorkTimer.sln"))) break;
+                dir = Path.GetDirectoryName(dir);
+                if (dir == null) { dir = AppContext.BaseDirectory; break; }
+            }
+            var settingsDir = Path.GetFullPath(Path.Combine(dir, "src", "WorkTimer.Settings", "bin",
+                "Debug", "net9.0-windows10.0.26100.0"));
+            var exe = Path.Combine(settingsDir, "WorkTimer.Settings.exe");
+            if (!File.Exists(exe))
+                exe = Path.Combine(settingsDir, "win-x64", "WorkTimer.Settings.exe");
+            if (File.Exists(exe))
+                Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = true });
+            else
+                MessageBox.Show($"找不到设置程序，请先编译 Settings 项目。\n查找位置: {exe}", "错误");
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"无法启动设置窗口: {ex.Message}", "错误");
-        }
-    }
-
-    private void ShowWindow()
-    {
-        Visibility = Visibility.Visible;
-        WindowState = WindowState.Normal;
-        Activate();
+        catch (Exception ex) { MessageBox.Show($"无法启动设置窗口: {ex.Message}", "错误"); }
     }
 
     private void TogglePassthrough()
     {
-        if (_showContinuationPrompt) return;
-        if (_findMeMode) { ExitFindMeMode(); return; }
-        if (Visibility == Visibility.Visible && Opacity > 0.1)
-        {
-            // 隐藏到托盘
-            Visibility = Visibility.Hidden;
-        }
+        if (_state == OverlayWindowState.ContinuationPrompt) return;
+        if (_state == OverlayWindowState.FindMe) { ExitFindMe(); return; }
+        if (_state == OverlayWindowState.Hidden || Visibility != Visibility.Visible || Opacity < 0.1)
+            TransitionTo(OverlayWindowState.Interactive);
         else
-        {
-            // 从托盘唤出
-            ShowWindow();
-            _inPassthrough = false;
-            _isMouseOver = true;
-            Opacity = 0.8;
-        }
+            TransitionTo(OverlayWindowState.Hidden);
     }
 
-    // ─── 位置持久化 ──────────────────────────────────────
+    // ═══════════════════════════════════════════════════════
+    //  位置持久化
+    // ═══════════════════════════════════════════════════════
+
     private void RestorePosition()
     {
         if (_configService.Data.WindowLeft >= 0 && _configService.Data.WindowTop >= 0)
-        {
-            Left = _configService.Data.WindowLeft;
-            Top = _configService.Data.WindowTop;
-        }
+        { Left = _configService.Data.WindowLeft; Top = _configService.Data.WindowTop; }
         else
-        {
-            var wa = SystemParameters.WorkArea;
-            Left = wa.Right - 240;
-            Top = wa.Bottom - 140;
-        }
+        { var wa = SystemParameters.WorkArea; Left = wa.Right - 240; Top = wa.Bottom - 140; }
     }
 
     protected override void OnLocationChanged(EventArgs e)
     {
         base.OnLocationChanged(e);
-        if (_configService != null && WindowState == WindowState.Normal)
-        {
-            _configService.Data.WindowLeft = Left;
-            _configService.Data.WindowTop = Top;
-        }
+        if (_configService != null && this.WindowState == System.Windows.WindowState.Normal)
+        { _configService.Data.WindowLeft = Left; _configService.Data.WindowTop = Top; }
     }
 
-    // ─── 托盘图标 ───────────────────────────────────────
+    // ═══════════════════════════════════════════════════════
+    //  托盘图标
+    // ═══════════════════════════════════════════════════════
+
     private static System.Drawing.Icon CreateAppIcon()
     {
         var icoPath = Path.Combine(AppContext.BaseDirectory, "Resources", "worktimer-logo.ico");
-        if (File.Exists(icoPath))
-            return new System.Drawing.Icon(icoPath);
+        if (File.Exists(icoPath)) return new System.Drawing.Icon(icoPath);
         var bmp = new System.Drawing.Bitmap(16, 16);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
