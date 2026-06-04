@@ -56,6 +56,7 @@ public partial class MainWindow : Window
     private int _hoverThreshold;
     private bool _showContinuationPrompt;
     private bool _blinkState;
+    private bool _findMeMode;
 
     public MainWindow(DatabaseService db, SessionManager sessionManager)
     {
@@ -91,6 +92,7 @@ public partial class MainWindow : Window
             Visibility = Visibility.Visible,
         };
         _trayIcon.TrayMouseDoubleClick += (_, _) => TogglePassthrough();
+        _trayIcon.TrayLeftMouseDown += (_, _) => EnterFindMeMode();
         _trayIcon.ContextMenu = CreateTrayMenu();
 
         Loaded += MainWindow_Loaded;
@@ -162,7 +164,7 @@ public partial class MainWindow : Window
     // ─── 鼠标轮询（每 200ms）─────────────────────────────
     private void PollTimer_Tick(object? sender, EventArgs e)
     {
-        if (_showContinuationPrompt) return;
+        if (_findMeMode || _showContinuationPrompt) return;
         if (_windowHandle == nint.Zero) return;
 
         GetCursorPos(out POINT cursor);
@@ -316,6 +318,38 @@ public partial class MainWindow : Window
             DragMove();
     }
 
+    // ─── 查找模式 ────────────────────────────────────────
+    private void EnterFindMeMode()
+    {
+        _findMeMode = true;
+        var saved = TimeText.Text;
+        TimeText.Text = "我在这里";
+        StatusText.FontSize = 12;
+        StatusText.Text = "点击恢复";
+        _timerService.Stop();
+        _pollTimer.Stop();
+
+        _inPassthrough = false;
+        ShowWindow();
+        BeginStoryboard((System.Windows.Media.Animation.Storyboard)FindResource("FadeIn"));
+        SetAmber(blink: true);
+    }
+
+    private void ExitFindMeMode()
+    {
+        if (!_findMeMode) return;
+        _findMeMode = false;
+        ResetColors();
+        TimeText.FontSize = 26;
+        StatusText.Text = _sessionManager.IsPaused ? "已暂停" : "工作中";
+        _timerService.Start();
+        _pollTimer.Start();
+
+        _inPassthrough = true;
+        Opacity = 0.15;
+        _isMouseOver = false;
+    }
+
     // ─── 计时 UI ────────────────────────────────────────
     private void OnTimerTick(TimeSpan elapsed)
     {
@@ -338,6 +372,7 @@ public partial class MainWindow : Window
     // ─── 左键（暂停/继续）────────────────────────────────
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (_findMeMode) { ExitFindMeMode(); return; }
         if (_showContinuationPrompt || !_interactiveMode) return;
         _ = TogglePauseAsync();
     }
@@ -405,25 +440,29 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ShowWindow()
+    {
+        Visibility = Visibility.Visible;
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
     private void TogglePassthrough()
     {
         if (_showContinuationPrompt) return;
-        if (!_interactiveMode)
+        if (_findMeMode) { ExitFindMeMode(); return; }
+        if (Visibility == Visibility.Visible && Opacity > 0.1)
         {
-            _interactiveMode = true;
-            _inPassthrough = false;
-            _isMouseOver = true;
-            _hoverTickCount = 99;
-            Opacity = 0.8;
-            Activate();
+            // 隐藏到托盘
+            Visibility = Visibility.Hidden;
         }
         else
         {
-            _interactiveMode = false;
-            _inPassthrough = true;
-            _hoverTickCount = 0;
-            _isMouseOver = false;
-            Opacity = 0.15;
+            // 从托盘唤出
+            ShowWindow();
+            _inPassthrough = false;
+            _isMouseOver = true;
+            Opacity = 0.8;
         }
     }
 
