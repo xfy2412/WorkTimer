@@ -1,0 +1,27 @@
+<Window x:Class="WorkTimer.Overlay.DarkDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="提示" Width="360" Height="180"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        Topmost="True">
+    <Border CornerRadius="10" Background="#2D2D2D" BorderBrush="#555" BorderThickness="1">
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <TextBlock x:Name="MessageText" Grid.Row="0"
+                       Foreground="White" FontSize="14"
+                       TextWrapping="Wrap" VerticalAlignment="Center"
+                       Text="WorkTimer 已在运行中&#x0a;如果看不到窗口，请在托盘图标右键菜单中点击「显示/隐藏」"/>
+            <Button Grid.Row="1" Content="确定"
+                    Click="Ok_Click"
+                    Width="80" Height="32" HorizontalAlignment="Center"
+                    Background="#555" Foreground="White"
+                    BorderThickness="0"/>
+        </Grid>
+    </Border>
+</Window>

@@ -17,27 +17,19 @@ public partial class App : Application
 
         if (!isNew)
         {
-            // 已有实例运行，激活它
-            var processes = Process.GetProcessesByName("WorkTimer.Overlay")
-                .Where(p => p.Id != Environment.ProcessId)
-                .ToList();
+            // 检查是否真有另一个进程在运行
+            var running = Process.GetProcessesByName("WorkTimer.Overlay")
+                .Any(p => p.Id != Environment.ProcessId);
 
-            foreach (var proc in processes)
+            if (running)
             {
-                try
-                {
-                    var hWnd = proc.MainWindowHandle;
-                    if (hWnd != nint.Zero)
-                    {
-                        _ = NativeMethods.ShowWindowAsync(hWnd, NativeMethods.SW_RESTORE);
-                        _ = NativeMethods.SetForegroundWindow(hWnd);
-                    }
-                }
-                catch { /* 进程可能已结束 */ }
+                new DarkDialog().ShowDialog();
+                Shutdown();
+                return;
             }
-
-            Shutdown();
-            return;
+            // 没有实际进程 → Mutex 是残留的，忽略它
+            _mutex.Dispose();
+            _mutex = new Mutex(true, MutexName, out _);
         }
 
         // 初始化服务
