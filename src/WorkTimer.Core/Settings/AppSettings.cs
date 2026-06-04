@@ -3,7 +3,7 @@ namespace WorkTimer.Core.Settings;
 public class AppSettings
 {
     /// <summary>悬停延迟（秒）</summary>
-    public double HoverDelaySeconds { get; set; } = 2.0;
+    public double HoverDelaySeconds { get; set; } = 1.0;
 
     /// <summary>窗口默认宽度</summary>
     public double WindowWidth { get; set; } = 220;

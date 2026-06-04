@@ -1,19 +1,13 @@
-<?xml version="1.0" encoding="utf-8" ?>
-<Page
-    x:Class="WorkTimer_Settings.Pages.HomePage"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:local="using:WorkTimer_Settings.Pages"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
+<Page x:Class="WorkTimer_Settings.Pages.HomePage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer>
+        <StackPanel Margin="24,16" Spacing="16">
+            <TextBlock Text="个性化设置" Style="{StaticResource TitleTextBlockStyle}"/>
 
-    <Grid Padding="24,16,24,16" RowSpacing="24">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Home" />
-        <TextBlock Grid.Row="1" Text="This is the Home page" />
-    </Grid>
+            <TextBox Header="悬停亮起延迟（秒）" Text="{x:Bind Settings.HoverDelaySeconds, Mode=TwoWay}"/>
+            <TextBox Header="窗口宽度" Text="{x:Bind Settings.WindowWidth, Mode=TwoWay}"/>
+            <TextBox Header="窗口高度" Text="{x:Bind Settings.WindowHeight, Mode=TwoWay}"/>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

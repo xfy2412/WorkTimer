@@ -1,14 +1,15 @@
 using Microsoft.UI.Xaml.Controls;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
+using WorkTimer.Core.Settings;
 
 namespace WorkTimer_Settings.Pages;
 
 public sealed partial class HomePage : Page
 {
+    public AppSettings Settings { get; }
+
     public HomePage()
     {
         InitializeComponent();
+        Settings = new SettingsManager().Data;
     }
 }

@@ -1,19 +1,11 @@
-<?xml version="1.0" encoding="utf-8" ?>
-<Page
-    x:Class="WorkTimer_Settings.Pages.AboutPage"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:local="using:WorkTimer_Settings.Pages"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
-
-    <Grid Padding="24,16,24,16" RowSpacing="24">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-        <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="About" />
-        <TextBlock Grid.Row="1" Text="This is the About page" />
-    </Grid>
+<Page x:Class="WorkTimer_Settings.Pages.AboutPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Margin="24,16" Spacing="12">
+        <TextBlock Text="关于" Style="{StaticResource TitleTextBlockStyle}"/>
+        <TextBlock Text="WorkTimer - 工作计时器" FontSize="16"/>
+        <TextBlock Text="一个开机自启的半透明桌面计时器，记录工作时长，支持关机续接。" Foreground="#888" TextWrapping="Wrap"/>
+        <HyperlinkButton Content="github.com/xfy2412/WorkTimer"
+                         NavigateUri="https://github.com/xfy2412/WorkTimer"/>
+    </StackPanel>
 </Page>

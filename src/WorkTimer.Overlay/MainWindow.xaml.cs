@@ -11,6 +11,7 @@ using Hardcodet.Wpf.TaskbarNotification;
 using WorkTimer.Core;
 using WorkTimer.Core.Data;
 using WorkTimer.Core.Services;
+using WorkTimer.Core.Settings;
 using WorkTimer.Overlay.Services;
 
 namespace WorkTimer.Overlay;
@@ -43,6 +44,7 @@ public partial class MainWindow : Window
     private readonly TimerService _timerService;
     private readonly HeartbeatService _heartbeatService;
     private readonly ConfigService _configService;
+    private readonly SettingsManager _settingsManager;
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _blinkTimer;
     private readonly TaskbarIcon _trayIcon;
@@ -51,6 +53,7 @@ public partial class MainWindow : Window
     private bool _isMouseOver;
     private bool _interactiveMode;
     private int _hoverTickCount;
+    private int _hoverThreshold;
     private bool _showContinuationPrompt;
     private bool _blinkState;
 
@@ -63,9 +66,11 @@ public partial class MainWindow : Window
         _timerService = new TimerService(sessionManager);
         _heartbeatService = new HeartbeatService(db);
         _configService = new ConfigService();
+        _settingsManager = new SettingsManager();
 
         _timerService.Tick += OnTimerTick;
         _timerService.PauseStateChanged += OnPauseStateChanged;
+        _hoverThreshold = (int)(_settingsManager.Data.HoverDelaySeconds * 1000 / 200);
 
         _pollTimer = new DispatcherTimer(DispatcherPriority.Normal)
         {
@@ -178,7 +183,7 @@ public partial class MainWindow : Window
             if (!_interactiveMode)
             {
                 _hoverTickCount++;
-                if (_hoverTickCount >= 5)
+                if (_hoverTickCount >= _hoverThreshold)
                 {
                     _interactiveMode = true;
                     _inPassthrough = false;
