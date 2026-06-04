@@ -1,3 +1,4 @@
+using WorkTimer.Core;
 using WorkTimer.Core.Data;
 
 namespace WorkTimer.Overlay.Services;
@@ -12,7 +13,7 @@ public class HeartbeatService : IDisposable
     public HeartbeatService(DatabaseService db)
     {
         _db = db;
-        _timer = new System.Timers.Timer(30_000); // 30秒
+        _timer = new System.Timers.Timer(30_000);
         _timer.Elapsed += OnElapsed;
     }
 
@@ -20,8 +21,7 @@ public class HeartbeatService : IDisposable
     {
         _sessionId = sessionId;
         _running = true;
-        // 立即写入第一条
-        _db.InsertHeartbeatAsync(_sessionId, DateTime.UtcNow).ConfigureAwait(false);
+        _ = WriteHeartbeatAsync(); // 立即写入第一条
         _timer.Start();
     }
 
@@ -31,10 +31,22 @@ public class HeartbeatService : IDisposable
         _timer.Stop();
     }
 
-    private void OnElapsed(object? sender, System.Timers.ElapsedEventArgs e)
+    private async void OnElapsed(object? sender, System.Timers.ElapsedEventArgs e)
     {
         if (!_running) return;
-        _db.InsertHeartbeatAsync(_sessionId, DateTime.UtcNow).ConfigureAwait(false);
+        await WriteHeartbeatAsync();
+    }
+
+    private async Task WriteHeartbeatAsync()
+    {
+        try
+        {
+            await _db.InsertHeartbeatAsync(_sessionId, DateTime.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            Logger.Write($"[Heartbeat] 写入失败: {ex.Message}");
+        }
     }
 
     public void Dispose()

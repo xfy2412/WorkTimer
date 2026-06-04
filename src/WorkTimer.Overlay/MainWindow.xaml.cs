@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using Hardcodet.Wpf.TaskbarNotification;
 using WorkTimer.Core;
 using WorkTimer.Core.Data;
+using WorkTimer.Core.IPC;
 using WorkTimer.Core.Services;
 using WorkTimer.Core.Settings;
 using WorkTimer.Overlay.Services;
@@ -54,6 +55,7 @@ public partial class MainWindow : Window
     private bool _interactiveMode;
     private int _hoverTickCount;
     private int _hoverThreshold;
+    private double _defaultOpacity;
     private bool _showContinuationPrompt;
     private bool _blinkState;
     private bool _findMeMode;
@@ -68,6 +70,7 @@ public partial class MainWindow : Window
         _heartbeatService = new HeartbeatService(db);
         _configService = new ConfigService();
         _settingsManager = new SettingsManager();
+        _defaultOpacity = _settingsManager.Data.DefaultOpacity;
 
         _timerService.Tick += OnTimerTick;
         _timerService.PauseStateChanged += OnPauseStateChanged;
@@ -114,13 +117,19 @@ public partial class MainWindow : Window
         {
             var source = HwndSource.FromHwnd(_windowHandle);
             source?.AddHook(WndProc);
-            Opacity = 0.15;
+            Opacity = _defaultOpacity;
         }
     }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Logger.Write("[MainWindow] 窗口加载完成");
+
+        // 启动 IPC 监听，收到消息后分发到 UI 线程再处理
+        var uiDispatcher = Dispatcher;
+        _ = Task.Run(() => SettingsIpc.StartServerAsync(
+            msg => uiDispatcher.BeginInvoke(() => OnIpcMessage(msg))));
+
         var (session, needsPrompt) = await _sessionManager.StartupCheckAsync();
 
         if (session != null)
@@ -303,7 +312,7 @@ public partial class MainWindow : Window
         _interactiveMode = false;
         _hoverTickCount = 0;
         _inPassthrough = true;
-        Opacity = 0.15;
+        Opacity = _defaultOpacity;
         _isMouseOver = false;
 
         _pollTimer.Start();
@@ -346,7 +355,7 @@ public partial class MainWindow : Window
         _pollTimer.Start();
 
         _inPassthrough = true;
-        Opacity = 0.15;
+        Opacity = _defaultOpacity;
         _isMouseOver = false;
     }
 
@@ -367,6 +376,45 @@ public partial class MainWindow : Window
             SetAmber(blink: true);    // 暂停 → 琥珀色闪烁
         else
             ResetColors();            // 恢复 → 白色
+    }
+
+    // ─── IPC 配置同步 ───────────────────────────────────
+    private void OnIpcMessage(IpcMessage msg)
+    {
+        switch (msg.Type)
+        {
+            case "set":
+                ApplySetting(msg.Key, msg.Value);
+                break;
+            case "reload":
+                _settingsManager.Load();
+                _hoverThreshold = (int)(_settingsManager.Data.HoverDelaySeconds * 1000 / 200);
+                _defaultOpacity = _settingsManager.Data.DefaultOpacity;
+                if (_inPassthrough) Opacity = _defaultOpacity;
+                break;
+        }
+    }
+
+    private void ApplySetting(string key, string value)
+    {
+        switch (key)
+        {
+            case "HoverDelaySeconds":
+                if (double.TryParse(value, out var hd))
+                {
+                    _hoverThreshold = (int)(hd * 1000 / 200);
+                    _settingsManager.Data.HoverDelaySeconds = hd;
+                }
+                break;
+            case "DefaultOpacity":
+                if (double.TryParse(value, out var op))
+                {
+                    _defaultOpacity = op;
+                    _settingsManager.Data.DefaultOpacity = op;
+                    if (_inPassthrough) Opacity = op;
+                }
+                break;
+        }
     }
 
     // ─── 左键（暂停/继续）────────────────────────────────

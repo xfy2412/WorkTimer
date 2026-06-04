@@ -1,28 +1,65 @@
+using System.ComponentModel;
+
 namespace WorkTimer.Core.Settings;
 
-public class AppSettings
+public class AppSettings : INotifyPropertyChanged
 {
-    /// <summary>悬停延迟（秒）</summary>
-    public double HoverDelaySeconds { get; set; } = 1.0;
+    public event PropertyChangedEventHandler? PropertyChanged;
 
-    /// <summary>窗口默认宽度</summary>
-    public double WindowWidth { get; set; } = 220;
+    private double _hoverDelaySeconds = 1.0;
+    private double _windowWidth = 220;
+    private double _windowHeight = 100;
+    private double _defaultOpacity = 0.15;
+    private double _interactiveOpacity = 0.8;
+    private bool _autoStart = true;
+    private int _heartbeatIntervalSeconds = 30;
+    private int _pollIntervalMs = 200;
 
-    /// <summary>窗口默认高度</summary>
-    public double WindowHeight { get; set; } = 100;
+    public double HoverDelaySeconds
+    {
+        get => _hoverDelaySeconds;
+        set { _hoverDelaySeconds = value; PropertyChanged?.Invoke(this, new(nameof(HoverDelaySeconds))); }
+    }
 
-    /// <summary>默认透明度（穿透态）</summary>
-    public double DefaultOpacity { get; set; } = 0.15;
+    public double WindowWidth
+    {
+        get => _windowWidth;
+        set { _windowWidth = value; PropertyChanged?.Invoke(this, new(nameof(WindowWidth))); }
+    }
 
-    /// <summary>交互态透明度</summary>
-    public double InteractiveOpacity { get; set; } = 0.8;
+    public double WindowHeight
+    {
+        get => _windowHeight;
+        set { _windowHeight = value; PropertyChanged?.Invoke(this, new(nameof(WindowHeight))); }
+    }
 
-    /// <summary>开机自启</summary>
-    public bool AutoStart { get; set; } = true;
+    public double DefaultOpacity
+    {
+        get => _defaultOpacity;
+        set { _defaultOpacity = value; PropertyChanged?.Invoke(this, new(nameof(DefaultOpacity))); }
+    }
 
-    /// <summary>心跳间隔（秒）</summary>
-    public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public double InteractiveOpacity
+    {
+        get => _interactiveOpacity;
+        set { _interactiveOpacity = value; PropertyChanged?.Invoke(this, new(nameof(InteractiveOpacity))); }
+    }
 
-    /// <summary>轮询间隔（毫秒）</summary>
-    public int PollIntervalMs { get; set; } = 200;
+    public bool AutoStart
+    {
+        get => _autoStart;
+        set { _autoStart = value; PropertyChanged?.Invoke(this, new(nameof(AutoStart))); }
+    }
+
+    public int HeartbeatIntervalSeconds
+    {
+        get => _heartbeatIntervalSeconds;
+        set { _heartbeatIntervalSeconds = value; PropertyChanged?.Invoke(this, new(nameof(HeartbeatIntervalSeconds))); }
+    }
+
+    public int PollIntervalMs
+    {
+        get => _pollIntervalMs;
+        set { _pollIntervalMs = value; PropertyChanged?.Invoke(this, new(nameof(PollIntervalMs))); }
+    }
 }
